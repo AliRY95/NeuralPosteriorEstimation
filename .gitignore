@@ -1,0 +1,62 @@
+# Python cache and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+.build/
+.dist/
+*.egg
+
+# Virtual environments
+venv/
+.env/
+.myEnv/
+myEnv/
+
+# Jupyter & IPython
+.ipynb_checkpoints/
+*.ipynb~
+
+# Logs & artifacts
+*.log
+logs/
+*.pt
+*.pth
+*.ckpt
+artifacts/
+checkpoints/
+
+# Data outputs (keep raw definitions, ignore generated large CSV unless committed intentionally)
+/data/*.csv
+!data/README.md
+sbi-logs/
+
+# VS Code
+.vscode/
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+
+# Matplotlib, cache dirs
+.matplotlib/
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+
+# Archive files
+*.tar.gz
+*.zip
+
+# Node / front-end (if added later)
+node_modules/
+
+# Generated figures
+code/plot/
+
+# Model context / debug
+*.prof
+*.pickle
