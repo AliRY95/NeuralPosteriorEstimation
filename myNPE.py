@@ -44,22 +44,23 @@ def main():
     )
     num_simulations = args.n_sim
     thetas = prior.sample((num_simulations,))
-    xs = simulator_trajectory(thetas, sim_cfg=sim_cfg)
+    xs_xy_seq = simulator_trajectory(thetas, sim_cfg=sim_cfg)
+    # xs_xy_flat = xs_xy_seq.reshape(xs_xy_seq.shape[0], -1)
     
-    if args.load:
-        posterior_npe = load_posterior(args.load, prior)
-    else:
-        density_estimator_npe = posterior_nn(
-            model='maf',
-            z_score_x='none',
-            z_score_y='none',
-        )
-        inference_npe = NPE(prior=prior, density_estimator=density_estimator_npe)
-        posterior_npe = inference_npe.append_simulations(thetas, xs).train()
-        if args.save:
-            save_posterior(args.save, prior, posterior_npe, input_length=xs.shape[1])
-    # Evaluation
-    eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior_npe)
+    # if args.load:
+    #     posterior_npe = load_posterior(args.load, prior)
+    # else:
+    #     density_estimator_npe = posterior_nn(
+    #         model='maf',
+    #         z_score_x='none',
+    #         z_score_y='none',
+    #     )
+    #     inference_npe = NPE(prior=prior, density_estimator=density_estimator_npe)
+    #     posterior_npe = inference_npe.append_simulations(thetas, xs_xy_seq).train()
+    #     if args.save:
+    #         save_posterior(args.save, prior, posterior_npe, input_length=xs_xy_seq.shape[1])
+    # # Evaluation
+    # eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior_npe, use_xy=True)
     
     # -----------------------------
     # Using TransformerEmbedding
@@ -70,7 +71,7 @@ def main():
         class ProjectedTransformer(nn.Module):
             def __init__(self, transformer):
                 super().__init__()
-                self.proj, self.transformer = nn.Linear(1, 192), transformer
+                self.proj, self.transformer = nn.Linear(2, 192), transformer
 
             def forward(self, x: torch.Tensor) -> torch.Tensor:
                 if x.ndim == 2:
@@ -81,12 +82,12 @@ def main():
 
         trans_cfg = dict(
             vit=False,             # Use standard transformer, not ViT-style
-            feature_space_dim=192, # Internal embedding dimension (num_heads * head_dim)
+            feature_space_dim=192, # d_model = num_heads * head_dim
             sequence_length=100,   # Number of time points
-            output_dim=16,         # Output feature dimension for NPE
-            num_layers=3,          # Transformer depth
-            num_heads=12,          # Number of attention heads
-            head_dim=16,           # Size per attention head
+            output_dim=8,          # Smaller output feature dimension
+            num_layers=2,          # Lighter depth
+            num_heads=12,          # Keep default heads to match sbi internals
+            head_dim=16,           # 12 * 16 = 192
             d_model=192,           # same as feature_space_dim
         )
 
@@ -99,11 +100,13 @@ def main():
             z_score_y="none",
         )
         inference_trans = NPE(prior=prior, density_estimator=density_estimator_trans)
-        posterior_trans = inference_trans.append_simulations(thetas, xs).train()
+        posterior_trans = inference_trans.append_simulations(thetas, xs_xy_seq).train()
         if args.save:
-            save_posterior_transformer(args.save, prior, posterior_trans, embedding_trans, trans_cfg, input_length=xs.shape[1])
+            # Flattened XY length is 2 * T
+            flat_len = xs_xy_seq.shape[1] * xs_xy_seq.shape[2]
+            save_posterior_transformer(args.save, prior, posterior_trans, embedding_trans, trans_cfg, input_length=flat_len)
     # Evaluation
-    eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior_trans)
+    eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior_trans, use_xy=True, flatten_xy=False)
 
 
 if __name__ == "__main__":
