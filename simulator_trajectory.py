@@ -1,11 +1,12 @@
 from __future__ import annotations
+
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import Callable, Optional, Sequence, Tuple, Union
+
 import numpy as np
 
-
 Field = Callable[[float, float], float]
-Gradient = Callable[[float, float], Tuple[float, float]]
+Gradient = Callable[[float, float], tuple[float, float]]
 
 
 ################################################################################
@@ -26,7 +27,7 @@ class Trajectory:
         dy = np.diff(y)
         return np.arctan2(dy, dx)
 
-    def interpolate_to_integers(self, T_max: float) -> "Trajectory":
+    def interpolate_to_integers(self, T_max: float) -> Trajectory:
         M = int(np.floor(T_max))
         t_int = np.arange(1.0, M + 1, 1.0)
         x_int = np.empty_like(t_int)
@@ -60,21 +61,23 @@ def default_field(x: float, y: float) -> float:
     """Simple linear chemo-attractant field C(x, y) = 0.01 x."""
     return 0.01 * x
 
+
 # Central finite-difference approximation of gradient
-def central_gradient(C: Field, x: float, y: float, h: float = 1e-3) -> Tuple[float, float]:
+def central_gradient(C: Field, x: float, y: float, h: float = 1e-3) -> tuple[float, float]:
     """Central finite-difference approximation of ∇C."""
     dCdx = (C(x + h, y) - C(x - h, y)) / (2.0 * h)
     dCdy = (C(x, y + h) - C(x, y - h)) / (2.0 * h)
     return dCdx, dCdy
+
 
 ################################################################################
 # Simulation functions
 ################################################################################
 # Codling-style correlated random walk simulator
 def simulate_codling_walk(
-    theta: dict,   # {"kappa": float, "d_tau": float}
+    theta: dict,  # {"kappa": float, "d_tau": float}
     config: dict,  # {"s","lambda","T_max","B","seed","C","gradC","theta_init"}
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ) -> Trajectory:
     """
     theta keys:
@@ -96,17 +99,17 @@ def simulate_codling_walk(
     s = float(config.get("s", 1.0))
     lambda_ = float(config.get("lambda", 0.5))
     T_max = float(config.get("T_max", 100.0))
-    C = config.get("C", None)
-    gradC = config.get("gradC", None)
-    theta_init = config.get("theta_init", None)
+    C = config.get("C")
+    gradC = config.get("gradC")
+    theta_init = config.get("theta_init")
     # initialize local RNG (avoid global state)
     if rng is None:
-        seed = config.get("seed", None)
+        seed = config.get("seed")
         try:
             rng = np.random.default_rng(None if seed is None else int(seed))
         except Exception:
             rng = np.random.default_rng()
-    
+
     if C is None:
         C = default_field
     if gradC is None:
@@ -152,11 +155,12 @@ def simulate_codling_walk(
         segment_angles=np.array(segment_angles),
     )
 
+
 # Simulate a population of walkers using theta/config dictionaries.
 def simulate_population(
-    theta: dict,   # {"kappa": float, "d_tau": float}
+    theta: dict,  # {"kappa": float, "d_tau": float}
     config: dict,  # {"N_pop","s","lambda","T_max","B","seed", ...}
-    rng: Optional[np.random.Generator] = None,
+    rng: np.random.Generator | None = None,
 ) -> Sequence[Trajectory]:
     """
     theta keys:
@@ -176,11 +180,11 @@ def simulate_population(
     N_pop = int(config.get("N_pop", 1))
 
     trajectories = []
-    base_seed = config.get("seed", None)
+    base_seed = config.get("seed")
     # If an RNG is provided, we can spawn independent streams by varying seed; else create per-walker RNGs.
     for i in range(N_pop):
         local_config = dict(config)
-        local_rng: Optional[np.random.Generator]
+        local_rng: np.random.Generator | None
         if rng is not None:
             # derive a new RNG using an offset seed if base_seed exists; otherwise, use a fresh rng
             if base_seed is not None:
@@ -201,9 +205,10 @@ def simulate_population(
 
     return trajectories
 
+
 # Compute population summary timeseries (mean segment angles)
 def population_summary_timeseries(
-    theta: dict,   # {"kappa": float, "d_tau": float}
+    theta: dict,  # {"kappa": float, "d_tau": float}
     config: dict,  # {"N_pop","s","lambda","T_max","B","seed", ...}
 ) -> np.ndarray:
     """
@@ -221,7 +226,7 @@ def population_summary_timeseries(
     - seed (int|None): RNG seed for reproducible trajectories. Default: None
     """
     # Optionally perturb kappa via config (backwards compatibility)
-    kappa_noise = config.get("kappa_noise", None)
+    kappa_noise = config.get("kappa_noise")
     if kappa_noise is not None:
         theta = {**theta, "kappa": float(theta["kappa"]) + float(kappa_noise)}
 
@@ -249,19 +254,56 @@ def population_summary_timeseries(
     padded = np.pad(mean_angles, (0, 1), mode="edge")
     return padded.astype(np.float32)
 
+def population_simple_summary(
+    theta: dict,  # {"kappa", "d_tau"}
+    config: dict,
+) -> np.ndarray:
+    """
+    Compute a simple 2-dimensional summary statistic for a population of walkers.
+    
+    Returns a summary vector of shape (2,) containing:
+    1. Mean displacement along the x-axis (chemotactic gradient direction)
+    2. Mean cosine of turn angles (indicator of directional persistence)
+    """
+    # Simulate population of trajectories
+    trajectories = simulate_population(theta=theta, config=config)
+
+    pull_x = []  # Net displacement along chemotactic gradient (x-axis)
+    cos_turns = []  # Cosine of consecutive turn angles
+
+    for traj in trajectories:
+        # Measure net displacement along x-axis (chemotactic gradient direction)
+        x_displacement = float(traj.x[-1] - traj.x[0])
+        pull_x.append(x_displacement)
+
+        # Compute turn angle statistics
+        angles = traj.segment_angles
+        if angles.size > 1:
+            # Unwrap angles to avoid discontinuities at ±π, then compute differences
+            dtheta = np.diff(np.unwrap(angles))
+            # Cosine of turn angles: values near 1 indicate straighter paths
+            cos_turns.extend(np.cos(dtheta))
+
+    # Aggregate over population
+    mean_pull_x = float(np.mean(pull_x))
+    mean_cos_turn = float(np.mean(cos_turns)) if cos_turns else 0.0
+
+    return np.array([mean_pull_x, mean_cos_turn], dtype=np.float32)
+
+
 ################################################################################
 # Plot
 ################################################################################
 # Plot trajectories
 def plot_trajectories(
-    trajectories: Union[Trajectory, Sequence[Trajectory]],
+    trajectories: Trajectory | Sequence[Trajectory],
     *,
     overlay: bool = True,
-    out_dir: Optional[str] = None,
-    seed: Optional[int] = None,
+    out_dir: str | None = None,
+    seed: int | None = None,
     show: bool = False,
     fname_prefix: str = "trajectory",
-    theta: Optional[dict] = None,
+    theta: dict | None = None,
 ) -> None:
     """
     Plot a single trajectory or a sequence of trajectories.
@@ -276,8 +318,9 @@ def plot_trajectories(
     - fname_prefix: filename prefix for saved figures.
     """
     try:
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
     except Exception:
         return
 
@@ -287,7 +330,7 @@ def plot_trajectories(
     else:
         traj_list = list(trajectories)
 
-    plot_dir = Path(out_dir) if out_dir is not None else Path(__file__).parent / 'plot'
+    plot_dir = Path(out_dir) if out_dir is not None else Path(__file__).parent / "plot"
     plot_dir.mkdir(parents=True, exist_ok=True)
     seed_str = f"seed_{int(seed)}" if seed is not None else "noseed"
     theta_str = ""
@@ -303,15 +346,15 @@ def plot_trajectories(
         # Save one file per trajectory
         for idx, traj in enumerate(traj_list):
             plt.figure(figsize=(4, 4))
-            plt.plot(traj.x, traj.y, '-o', markersize=2, linewidth=1)
+            plt.plot(traj.x, traj.y, "-o", markersize=2, linewidth=1)
             if traj.x.size > 0:
-                plt.scatter([traj.x[0]], [traj.y[0]], color='green', s=20, label='start')
-                plt.scatter([traj.x[-1]], [traj.y[-1]], color='red', s=20, label='end')
-            plt.axis('equal')
-            plt.title('Codling walk trajectory')
-            plt.xlabel('x')
-            plt.ylabel('y')
-            plt.legend(loc='best')
+                plt.scatter([traj.x[0]], [traj.y[0]], color="green", s=20, label="start")
+                plt.scatter([traj.x[-1]], [traj.y[-1]], color="red", s=20, label="end")
+            plt.axis("equal")
+            plt.title("Codling walk trajectory")
+            plt.xlabel("x")
+            plt.ylabel("y")
+            plt.legend(loc="best")
             plt.tight_layout()
             out_path = plot_dir / f"{fname_prefix}{theta_str}_{seed_str}_i{idx+1}.png"
             plt.savefig(out_path, dpi=150)
@@ -324,21 +367,21 @@ def plot_trajectories(
     else:
         # Overlay all trajectories in one figure with unique colors
         plt.figure(figsize=(5, 5))
-        cmap = plt.get_cmap('tab20')
+        cmap = plt.get_cmap("tab20")
         for idx, traj in enumerate(traj_list):
             color = cmap(idx % cmap.N)
-            plt.plot(traj.x, traj.y, linewidth=1.2, alpha=0.9, color=color, label=f'walker {idx+1}')
+            plt.plot(traj.x, traj.y, linewidth=1.2, alpha=0.9, color=color, label=f"walker {idx+1}")
             if traj.x.size > 0:
-                plt.scatter([traj.x[0]], [traj.y[0]], color=color, s=12, marker='o')
-                plt.scatter([traj.x[-1]], [traj.y[-1]], color=color, s=12, marker='x')
-        plt.axis('equal')
-        plt.title(f'Population trajectories (N={len(traj_list)})')
-        plt.xlabel('x')
-        plt.ylabel('y')
+                plt.scatter([traj.x[0]], [traj.y[0]], color=color, s=12, marker="o")
+                plt.scatter([traj.x[-1]], [traj.y[-1]], color=color, s=12, marker="x")
+        plt.axis("equal")
+        plt.title(f"Population trajectories (N={len(traj_list)})")
+        plt.xlabel("x")
+        plt.ylabel("y")
         if len(traj_list) <= 15:
-            plt.legend(loc='best', fontsize=8)
+            plt.legend(loc="best", fontsize=8)
         else:
-            plt.legend(bbox_to_anchor=(1.02, 1), loc='upper left', fontsize=6, ncol=1)
+            plt.legend(bbox_to_anchor=(1.02, 1), loc="upper left", fontsize=6, ncol=1)
         plt.tight_layout()
         out_path = plot_dir / f"population_overlay{theta_str}_{seed_str}_N{len(traj_list)}.png"
         plt.savefig(out_path, dpi=150)
@@ -349,19 +392,20 @@ def plot_trajectories(
                 pass
         plt.close()
 
+
 # Plot circular (rose) histograms of segment angles
 def plot_segment_angle_distributions(
-    trajectories: Union[Trajectory, Sequence[Trajectory]],
+    trajectories: Trajectory | Sequence[Trajectory],
     *,
     overlay: bool = False,
     bins: int = 36,
     grid_cols: int = 4,
-    out_dir: Optional[str] = None,
-    seed: Optional[int] = None,
+    out_dir: str | None = None,
+    seed: int | None = None,
     show: bool = False,
     degrees: bool = False,
     fname_prefix: str = "angles_rose",
-    theta: Optional[dict] = None,
+    theta: dict | None = None,
 ) -> None:
     """
     Plot circular (rose) histograms of segment angles for each walker.
@@ -381,8 +425,9 @@ def plot_segment_angle_distributions(
     - theta: optional dict with keys 'kappa' and 'd_tau' for filename annotation.
     """
     try:
-        import matplotlib.pyplot as plt
         from pathlib import Path
+
+        import matplotlib.pyplot as plt
     except Exception:
         return
 
@@ -393,7 +438,7 @@ def plot_segment_angle_distributions(
         traj_list = list(trajectories)
 
     # Prepare output
-    plot_dir = Path(out_dir) if out_dir is not None else Path(__file__).parent / 'plot'
+    plot_dir = Path(out_dir) if out_dir is not None else Path(__file__).parent / "plot"
     plot_dir.mkdir(parents=True, exist_ok=True)
     seed_str = f"seed_{int(seed)}" if seed is not None else "noseed"
     theta_str = ""
@@ -406,7 +451,7 @@ def plot_segment_angle_distributions(
             pass
 
     # Helper: histogram on [0, 2π)
-    def rose_hist(a: np.ndarray, bins: int) -> Tuple[np.ndarray, np.ndarray]:
+    def rose_hist(a: np.ndarray, bins: int) -> tuple[np.ndarray, np.ndarray]:
         if a.size == 0:
             # return empty
             edges = np.linspace(0.0, 2.0 * np.pi, bins + 1)
@@ -424,12 +469,21 @@ def plot_segment_angle_distributions(
 
     if overlay:
         fig, ax = plt.subplots(subplot_kw=dict(polar=True), figsize=(6, 6))
-        cmap = plt.get_cmap('tab20')
+        cmap = plt.get_cmap("tab20")
         for idx, traj in enumerate(traj_list):
             prob, centers = rose_hist(traj.segment_angles, bins)
             color = cmap(idx % cmap.N)
             width = 2.0 * np.pi / bins
-            ax.bar(centers, prob, width=width, bottom=0.0, color=color, alpha=0.5, edgecolor='none', label=f'walker {idx+1}')
+            ax.bar(
+                centers,
+                prob,
+                width=width,
+                bottom=0.0,
+                color=color,
+                alpha=0.5,
+                edgecolor="none",
+                label=f"walker {idx+1}",
+            )
         if degrees:
             ax.set_thetamin(0)
             ax.set_thetamax(360)
@@ -437,7 +491,7 @@ def plot_segment_angle_distributions(
             ax.set_xticklabels([f"{d}°" for d in range(0, 360, 45)])
         ax.set_title(f"Segment angle distributions (N={len(traj_list)})")
         if len(traj_list) <= 15:
-            ax.legend(loc='upper right', bbox_to_anchor=(1.2, 1.1), fontsize=8)
+            ax.legend(loc="upper right", bbox_to_anchor=(1.2, 1.1), fontsize=8)
         fig.tight_layout()
         out_path = plot_dir / f"{fname_prefix}_overlay{theta_str}_{seed_str}_N{len(traj_list)}.png"
         fig.savefig(out_path, dpi=150)
@@ -452,10 +506,16 @@ def plot_segment_angle_distributions(
         n = len(traj_list)
         cols = max(1, int(grid_cols))
         rows = int(np.ceil(n / cols))
-        fig, axes = plt.subplots(rows, cols, subplot_kw=dict(polar=True), figsize=(4 * cols, 4 * rows))
+        fig, axes = plt.subplots(
+            rows, cols, subplot_kw=dict(polar=True), figsize=(4 * cols, 4 * rows)
+        )
         # axes may be scalar if n==1
-        axes_arr = np.array(axes).reshape(rows, cols) if isinstance(axes, np.ndarray) else np.array([[axes]])
-        cmap = plt.get_cmap('tab20')
+        axes_arr = (
+            np.array(axes).reshape(rows, cols)
+            if isinstance(axes, np.ndarray)
+            else np.array([[axes]])
+        )
+        cmap = plt.get_cmap("tab20")
         for i, traj in enumerate(traj_list):
             r = i // cols
             c = i % cols
@@ -463,7 +523,7 @@ def plot_segment_angle_distributions(
             prob, centers = rose_hist(traj.segment_angles, bins)
             color = cmap(i % cmap.N)
             width = 2.0 * np.pi / bins
-            ax.bar(centers, prob, width=width, bottom=0.0, color=color, alpha=0.8, edgecolor='none')
+            ax.bar(centers, prob, width=width, bottom=0.0, color=color, alpha=0.8, edgecolor="none")
             ax.set_title(f"walker {i+1}")
             if degrees:
                 ax.set_thetamin(0)

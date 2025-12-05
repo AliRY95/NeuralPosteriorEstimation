@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-import numpy as np
 import torch
 from sbi.utils import BoxUniform
 
 from simulator import simulator_trajectory
+
 
 def eval_accuracy_trajectory(
     N: int,
