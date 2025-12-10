@@ -139,19 +139,16 @@ def load_posterior_transformer(path: str | Path, prior: BoxUniform):
 
     d_model = int(trans_cfg.get("d_model", trans_cfg.get("feature_space_dim", 192)))
     seq_len = int(trans_cfg.get("sequence_length", 100))
-    # If input_length is present, prefer deriving T from it
-    input_length = checkpoint.get("input_length", None)
-    if isinstance(input_length, int) and input_length > 0:
-        seq_len = input_length // 2
+    # Note: input_length in checkpoint is flattened (seq*features), not used for seq_len
 
     class ProjectedTransformer(torch.nn.Module):
         def __init__(self, transformer):
             super().__init__()
-            self.proj, self.transformer = torch.nn.Linear(2, d_model), transformer
+            self.proj, self.transformer = torch.nn.Linear(3, d_model), transformer
 
         def forward(self, x: torch.Tensor) -> torch.Tensor:
             if x.ndim == 2:
-                x = x.unsqueeze(-1)
+                x = x.unsqueeze(0)  # add batch dimension: [seq, feat] -> [1, seq, feat]
             x = self.proj(x)
             return self.transformer(x)
 
@@ -166,13 +163,13 @@ def load_posterior_transformer(path: str | Path, prior: BoxUniform):
     builder = posterior_nn(
         model="maf",
         embedding_net=embedding_trans,
-        z_score_x="none",
-        z_score_y="none",
+        z_score_x="independent",
+        z_score_y="independent",
     )
 
     # Prepare example batches to build network (match sbi signature discovered earlier)
     y_dim = prior.sample((1,)).shape[-1]
-    batch_x = torch.zeros(2, seq_len, 2)
+    batch_x = torch.zeros(2, seq_len, 3)  # Must match projection input features
     batch_theta = torch.zeros(2, y_dim)
     density_estimator = builder(batch_theta, batch_x)
 
@@ -189,8 +186,8 @@ def load_posterior_transformer(path: str | Path, prior: BoxUniform):
     builder_for_npe = posterior_nn(
         model="maf",
         embedding_net=embedding_trans,
-        z_score_x="none",
-        z_score_y="none",
+        z_score_x="independent",
+        z_score_y="independent",
     )
     inference = NPE(prior=prior, density_estimator=builder_for_npe)
     posterior = inference.build_posterior(density_estimator)

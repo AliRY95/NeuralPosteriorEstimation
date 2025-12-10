@@ -1,19 +1,26 @@
+import numpy as np
 import torch
 
-from simulator_trajectory import population_summary_timeseries
+from simulator_trajectory import simulate_population
 
 
 def simulator_trajectory(theta: torch.Tensor, sim_cfg: dict) -> torch.Tensor:
     """
-    Facade: simulate population summary time-series for given theta batch and
-    convert angle deltas to XY coordinates per timestep.
-
-    theta: torch.Tensor of shape (N, 2) with [kappa, d_tau].
-    sim_cfg: dict configuration forwarded to population_summary_timeseries.
-
-    Returns: torch.Tensor of shape (N, T, 2) with XY positions per theta.
+    Simulate raw trajectories for a batch of parameters.
+    
+    theta: (N, 2) with [kappa, d_tau].
+    sim_cfg: dict forwarded to simulate_population.
+    
+    Returns: torch.Tensor of shape (N, T, 3) with [x(t), y(t), t_norm] per theta.
     """
     theta = theta.reshape(-1, 2)
+
+    T_max = float(sim_cfg.get("T_max", 100.0))
+    M = int(np.floor(T_max))
+    # normalized time 0..1 (length M)
+    t_norm = np.linspace(1.0, float(M), M, dtype=np.float32)
+    t_norm = t_norm / float(M)
+
     traces = []
     step = float(sim_cfg.get("s", 1.0))
     for params in theta:
@@ -21,14 +28,15 @@ def simulator_trajectory(theta: torch.Tensor, sim_cfg: dict) -> torch.Tensor:
         d_tau = float(params[1])
         sim_theta = {"kappa": kappa, "d_tau": d_tau}
         # series: angle deltas per timestep (length T)
-        angles = torch.tensor(
-            population_summary_timeseries(sim_theta, sim_cfg), dtype=torch.float32
+        traj = simulate_population(sim_theta, sim_cfg)
+        tr = traj[0].interpolate_to_integers(T_max)
+        # stack into (M, 3): x, y, t_norm
+        arr = np.stack(
+            [tr.x.astype(np.float32),
+             tr.y.astype(np.float32),
+             t_norm],
+            axis=-1,
         )
-        heading = torch.cumsum(angles, dim=0)
-        dx = torch.cos(heading) * step
-        dy = torch.sin(heading) * step
-        x = torch.cumsum(dx, dim=0)
-        y = torch.cumsum(dy, dim=0)
-        xy = torch.stack([x, y], dim=-1)  # (T, 2)
-        traces.append(xy)
+        traces.append(torch.from_numpy(arr))
+    
     return torch.stack(traces)

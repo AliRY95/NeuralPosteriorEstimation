@@ -205,55 +205,6 @@ def simulate_population(
 
     return trajectories
 
-
-# Compute population summary timeseries (mean segment angles)
-def population_summary_timeseries(
-    theta: dict,  # {"kappa": float, "d_tau": float}
-    config: dict,  # {"N_pop","s","lambda","T_max","B","seed", ...}
-) -> np.ndarray:
-    """
-    theta keys:
-    - kappa (float): concentration parameter of von Mises turn angle distribution
-    - d_tau (float): chemo sensitivity parameter for biasing turn angles
-    config keys:
-    - N_pop (int): number of walkers. Default: 1
-    - T_max (float): total simulation horizon (time units). Default: 100.0
-    - lambda (float): Poisson turn rate λ (events per unit time). Default: 0.5
-    - s (float): constant speed (distance units per time unit). Default: 1.0
-    - C (Field|None): chemo-attractant field C(x, y). Default: linear field 0.01·x
-    - gradC (Gradient|None): gradient ∇C(x, y); if None, uses central differences. Default: None
-    - theta_init (float|None): initial heading angle in radians; if None, draws U[0, 2π). Default: None
-    - seed (int|None): RNG seed for reproducible trajectories. Default: None
-    """
-    # Optionally perturb kappa via config (backwards compatibility)
-    kappa_noise = config.get("kappa_noise")
-    if kappa_noise is not None:
-        theta = {**theta, "kappa": float(theta["kappa"]) + float(kappa_noise)}
-
-    trajectories = simulate_population(theta=theta, config=config)
-
-    N_pop = int(config.get("N_pop", 1))
-    T_max = float(config.get("T_max", 100.0))
-    M = int(np.floor(T_max))
-    angles = np.empty((N_pop, M - 1), dtype=np.float32)
-
-    for idx, traj in enumerate(trajectories):
-        interpolated = traj.interpolate_to_integers(T_max)
-        if interpolated.segment_angles.size < M - 1:
-            if interpolated.segment_angles.size == 0:
-                # No movement segments; pad with zeros
-                angles[idx] = np.zeros(M - 1, dtype=np.float32)
-            else:
-                pad = np.full(M - 1, interpolated.segment_angles[-1], dtype=np.float32)
-                pad[: interpolated.segment_angles.size] = interpolated.segment_angles
-                angles[idx] = pad
-        else:
-            angles[idx] = interpolated.segment_angles[: M - 1]
-
-    mean_angles = np.unwrap(angles, axis=1).mean(axis=0)
-    padded = np.pad(mean_angles, (0, 1), mode="edge")
-    return padded.astype(np.float32)
-
 def population_simple_summary(
     theta: dict,  # {"kappa", "d_tau"}
     config: dict,

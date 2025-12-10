@@ -56,6 +56,7 @@ def main():
         help="Use transformer embedding; default is basic MAF on flattened XY",
     )
     args = parser.parse_args()
+    
     # Set seed and rng for reproducibility
     seed = 123
     torch.manual_seed(seed)
@@ -77,7 +78,7 @@ def main():
     )
     num_simulations = args.n_sim
     thetas = prior.sample((num_simulations,))
-    xs_xy_seq = simulator_trajectory(thetas, sim_cfg=sim_cfg)
+    x = simulator_trajectory(thetas, sim_cfg=sim_cfg)
 
     # -----------------------------
     # Architecture selection
@@ -91,12 +92,13 @@ def main():
             class ProjectedTransformer(nn.Module):
                 def __init__(self, transformer):
                     super().__init__()
-                    self.proj, self.transformer = nn.Linear(2, 192), transformer
+                    self.proj, self.transformer = nn.Linear(3, 192), transformer
 
                 def forward(self, x: torch.Tensor) -> torch.Tensor:
                     if x.ndim == 2:
-                        x = x.unsqueeze(-1)
-                    x = self.proj(x)
+                        x = x.unsqueeze(0)  # add batch dimension: [seq, feat] -> [1, seq, feat]
+                    # x is now [batch, seq, 3], proj expects last dim = 3
+                    x = self.proj(x)  # [batch, seq, 192]
                     return self.transformer(x)
 
             trans_cfg = dict(
@@ -115,20 +117,18 @@ def main():
             density_estimator_trans = posterior_nn(
                 model="maf",
                 embedding_net=embedding_trans,
-                z_score_x="none",
-                z_score_y="none",
+                z_score_x="independent",
+                z_score_y="independent",
             )
             inference_trans = NPE(prior=prior, density_estimator=density_estimator_trans)
-            posterior = inference_trans.append_simulations(thetas, xs_xy_seq).train()
+            posterior = inference_trans.append_simulations(thetas, x).train()
             if args.save:
-                flat_len = xs_xy_seq.shape[1] * xs_xy_seq.shape[2]
+                flat_len = x.shape[1] * x.shape[2]
                 save_posterior_transformer(
                     args.save, prior, posterior, embedding_trans, trans_cfg, input_length=flat_len
                 )
         # Evaluation
-        eval_accuracy_trajectory(
-            args.eval_n, sim_cfg, prior, posterior, use_xy=True, flatten_xy=False
-        )
+        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior)
 
     # Basic MAF on flattened XY
     else:
@@ -136,7 +136,7 @@ def main():
             posterior = load_posterior(args.load, prior)
         else:
             # Flatten XY sequences for MAF
-            xs_xy_flat = xs_xy_seq.reshape(xs_xy_seq.shape[0], -1)
+            xs_xy_flat = x.reshape(x.shape[0], -1)
 
             inference = NPE(prior=prior)
             # density_estimator = posterior_nn(
@@ -150,9 +150,7 @@ def main():
             if args.save:
                 save_posterior(args.save, prior, posterior, input_length=xs_xy_flat.shape[1])
         # Evaluation
-        eval_accuracy_trajectory(
-            args.eval_n, sim_cfg, prior, posterior, use_xy=True, flatten_xy=True
-        )
+        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior)
 
 
 if __name__ == "__main__":
