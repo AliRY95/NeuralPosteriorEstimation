@@ -2,6 +2,8 @@
 import csv
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
+from pathlib import Path
 from sbi.utils import BoxUniform
 
 from simulator import simulator_trajectory
@@ -81,4 +83,74 @@ def eval_accuracy_trajectory(
             writer.writerow(row)
     print(f"Saved true/estimated values to {out_csv}")
 
+    # Plot accuracy results
+    plot_accuracy_results(out_csv, theta_true, est_mean, est_std, n_params)
 
+
+def plot_accuracy_results(csv_path: str, theta_true, est_mean, est_std, n_params: int):
+    """
+    Plot true vs estimated parameter values with uncertainty bands.
+    Creates one plot per parameter and saves independently.
+    
+    Args:
+        csv_path: Path to the CSV file (used to determine output directory)
+        theta_true: Tensor of true parameter values [N, n_params]
+        est_mean: List of estimated means [N tensors of shape [n_params]]
+        est_std: List of estimated stds [N tensors of shape [n_params]]
+        n_params: Number of parameters
+    """
+    csv_path = Path(csv_path)
+    output_dir = csv_path.parent
+    
+    # Convert to numpy arrays
+    true_np = theta_true.detach().cpu().numpy()  # [N, n_params]
+    est_mean_np = torch.stack(est_mean).detach().cpu().numpy()  # [N, n_params]
+    est_std_np = torch.stack(est_std).detach().cpu().numpy()  # [N, n_params]
+    
+    param_names = [r"$\kappa$", r"$d_\tau$"] if n_params == 2 else [rf"$\theta_{{{j}}}$" for j in range(n_params)]
+    param_file_names = ["kappa", "d_tau"] if n_params == 2 else [f"param_{j}" for j in range(n_params)]
+    
+    for j in range(n_params):
+        true_j = true_np[:, j]
+        est_j = est_mean_np[:, j]
+        std_j = est_std_np[:, j]
+        
+        # Sort by true values for better visualization
+        sort_idx = np.argsort(true_j)
+        true_sorted = true_j[sort_idx]
+        est_sorted = est_j[sort_idx]
+        std_sorted = std_j[sort_idx]
+        
+        # Create figure
+        fig, ax = plt.subplots(figsize=(7, 6))
+        
+        # Plot true vs estimated
+        ax.plot(true_sorted, true_sorted, 'k--', linewidth=1.5, label='Perfect fit', alpha=0.6)
+        ax.plot(true_sorted, est_sorted, 'o-', markersize=5, linewidth=1.5, label='Estimated', color='C0')
+        
+        # Add uncertainty band (±1 std)
+        ax.fill_between(
+            true_sorted,
+            est_sorted - std_sorted,
+            est_sorted + std_sorted,
+            alpha=0.3,
+            color='C0',
+            label='±1 std'
+        )
+        
+        ax.set_xlabel(f'True {param_names[j]}', fontsize=12)
+        ax.set_ylabel(f'Estimated {param_names[j]}', fontsize=12)
+        ax.set_title(f'{param_names[j]}: True vs Estimated', fontsize=14)
+        ax.legend(loc='best', fontsize=10)
+        ax.grid(True, alpha=0.3)
+        
+        # Equal aspect for comparison
+        ax.set_aspect('equal', adjustable='box')
+        
+        plt.tight_layout()
+        
+        # Save figure in PDF format (vector format with transparency support)
+        output_path = output_dir / f"accuracy_plot_{param_file_names[j]}.pdf"
+        plt.savefig(output_path, format='pdf', dpi=150, bbox_inches='tight')
+        print(f"Saved plot to {output_path}")
+        plt.close(fig)
