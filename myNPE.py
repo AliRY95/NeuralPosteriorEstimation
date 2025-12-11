@@ -9,10 +9,8 @@ from sbi.neural_nets import embedding_nets, posterior_nn
 from sbi.utils import BoxUniform
 from torch import nn
 
-from restartNetwork import (
-    load_posterior,
-    load_posterior_transformer,
-    save_posterior,
+from restartNetwork import (    
+    load_posterior_transformer,    
     save_posterior_transformer,
 )
 from posterior_test import eval_accuracy_trajectory
@@ -55,6 +53,14 @@ def main():
         action="store_true",
         help="Use transformer embedding; default is basic MAF on flattened XY",
     )
+    parser.add_argument(
+        "-f",
+        "--field-type",
+        type=str,
+        choices=["linear", "cancer"],
+        default="linear",
+        help="Field type for simulation: 'linear' (default) or 'cancer'",
+    )
     args = parser.parse_args()
     
     # Set seed and rng for reproducibility
@@ -62,20 +68,42 @@ def main():
     torch.manual_seed(seed)
     np.random.seed(seed)
 
-    # Prior over (kappa, d_tau)
-    theta_min = torch.tensor([1.0, 0.01])
-    theta_max = torch.tensor([8.0, 0.15])
-    prior = BoxUniform(theta_min, theta_max)
+    if args.field_type == "cancer":
+        # Prior over (kappa, d_tau, target_L)
+        theta_min = torch.tensor([1.0, 0.01, 0.2])
+        theta_max = torch.tensor([8.0, 0.15, 0.8])
+        prior = BoxUniform(theta_min, theta_max)
 
-    # Generate simulations
-    sim_cfg = dict(
-        N_pop=1,
-        T_max=100.0,
-        lambdaa=0.5,
-        s=1.0,
-        theta_init=None,
-        seed=seed,
-    )
+        # Generate simulations
+        sim_cfg = dict(
+            N_pop=1,
+            T_max=100.0,
+            field_type="cancer",
+            target_Q= 1000.0,
+            target_x0= 10.0,
+            target_y0= 10.0,
+            s=1.0,
+            # lambda=0.5,
+            theta_init=None,
+            seed=seed,
+        )
+    else:
+        # Prior over (kappa, d_tau)
+        theta_min = torch.tensor([1.0, 0.01])
+        theta_max = torch.tensor([8.0, 0.15])
+        prior = BoxUniform(theta_min, theta_max)
+
+        # Generate simulations
+        sim_cfg = dict(
+            N_pop=1,
+            T_max=100.0,
+            field_type="linear",
+            s=1.0,
+            # lambda=0.5,
+            theta_init=None,
+            seed=seed,
+        )
+
     num_simulations = args.n_sim
     thetas = prior.sample((num_simulations,))
     x = simulator_trajectory(thetas, sim_cfg=sim_cfg)
@@ -125,29 +153,28 @@ def main():
             if args.save:
                 flat_len = x.shape[1] * x.shape[2]
                 save_posterior_transformer(
-                    args.save, prior, posterior, embedding_trans, trans_cfg, input_length=flat_len
+                    args.save, prior, posterior, embedding_trans, trans_cfg, input_length=flat_len, field_type=args.field_type
                 )
         # Evaluation (transformer uses sequences, not flattened)
         eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior, flatten=False)
 
     # Basic MAF on flattened XY
     else:
-        if args.load:
-            posterior = load_posterior(args.load, prior)
-        else:
-            # Flatten XY sequences for MAF
-            xs_xy_flat = x.reshape(x.shape[0], -1)
+        if args.load or args.save:
+            Warning("Loading/saving not implemented for basic MAF path.")
 
-            density_estimator = posterior_nn(
-                model="maf",
-                z_score_x="independent",
-                z_score_y="independent",
-            )
-            inference = NPE(prior=prior, density_estimator=density_estimator)
-            tmp = inference.append_simulations(thetas, xs_xy_flat).train()
-            posterior = inference.build_posterior(tmp, sample_with="direct")
-            if args.save:
-                save_posterior(args.save, prior, posterior, input_length=xs_xy_flat.shape[1])
+        # Flatten XY sequences for MAF
+        xs_xy_flat = x.reshape(x.shape[0], -1)
+
+        density_estimator = posterior_nn(
+            model="maf",
+            z_score_x="independent",
+            z_score_y="independent",
+        )
+        inference = NPE(prior=prior, density_estimator=density_estimator)
+        tmp = inference.append_simulations(thetas, xs_xy_flat).train()
+        posterior = inference.build_posterior(tmp, sample_with="direct")
+        
         # Evaluation (basic MAF uses flattened trajectories)
         eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior, flatten=True)
 

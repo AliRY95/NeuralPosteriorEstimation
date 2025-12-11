@@ -16,3 +16,4 @@ $C(r) = \dfrac{Q}{2 \pi D} K_0 (\dfrac{r}{L}), \quad L = \sqrt{D/\lambda},\quad 
 * New parameter space: $\Theta = \[\kappa, d_{\tau}, Q, D, \lambda, (x_i,y_i)\]$ where $i = 1, \dots, B$ are the closest B point sources.
 * First, assuming 1 single source point fixed in domain.
 * For cases with cancer cells, we don't have any physical insights into some parameters such as Q, D, lambda. So, it makes more sense to use a wider prior for these values and with some help from SNPE, gradually converge to the actual values for these parameters.
+* For the chemical field, let's just assume Q = Q / D, lambda = lambda / D.
