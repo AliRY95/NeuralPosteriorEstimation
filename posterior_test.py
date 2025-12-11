@@ -14,6 +14,7 @@ def eval_accuracy_trajectory(
     prior: BoxUniform,
     posterior,
     out_csv: str = "data/accuracy_results.csv",
+    flatten: bool = False,
 ) -> None:
     """
     Evaluate the trained posterior on synthetic or CSV-generated data.
@@ -27,6 +28,9 @@ def eval_accuracy_trajectory(
     Saves CSV with true, estimated mean, and std for each test case.
 
     CSV columns: true_param_0, ..., true_param_D, est_param_0, ..., est_param_D, std_param_0, ..., std_param_D
+    
+    Args:
+        flatten: If True, flatten trajectories for basic MAF; if False, keep sequences for transformer
     """
     # Sample true parameters and simulate trajectories
     theta_true = prior.sample((N,))  # [N, D]
@@ -34,8 +38,13 @@ def eval_accuracy_trajectory(
 
     est_mean, est_std, err = [], [], []
     for i in range(N):
-        # Add batch dimension for posterior conditioning
-        x_o = x[i].unsqueeze(0)  # [1, seq_len, features]
+        # Prepare observation for posterior conditioning
+        if flatten:
+            # Basic MAF: flatten to 1D
+            x_o = x[i].flatten().unsqueeze(0)  # [1, seq_len*features]
+        else:
+            # Transformer: add batch dimension
+            x_o = x[i].unsqueeze(0)  # [1, seq_len, features]
         samples = posterior.sample(torch.Size([100]), x_o)  # [100, 1, D] or [100, D]
         samples = samples.squeeze(1) if samples.ndim == 3 else samples  # [100, D]
         mean = samples.mean(dim=0)

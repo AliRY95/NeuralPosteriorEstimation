@@ -127,8 +127,8 @@ def main():
                 save_posterior_transformer(
                     args.save, prior, posterior, embedding_trans, trans_cfg, input_length=flat_len
                 )
-        # Evaluation
-        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior)
+        # Evaluation (transformer uses sequences, not flattened)
+        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior, flatten=False)
 
     # Basic MAF on flattened XY
     else:
@@ -138,19 +138,18 @@ def main():
             # Flatten XY sequences for MAF
             xs_xy_flat = x.reshape(x.shape[0], -1)
 
-            inference = NPE(prior=prior)
-            # density_estimator = posterior_nn(
-            #     model="maf",
-            #     z_score_x="none",
-            #     z_score_y="none",
-            # )
-            # inference = NPE(prior=prior, density_estimator=density_estimator)
+            density_estimator = posterior_nn(
+                model="maf",
+                z_score_x="independent",
+                z_score_y="independent",
+            )
+            inference = NPE(prior=prior, density_estimator=density_estimator)
             tmp = inference.append_simulations(thetas, xs_xy_flat).train()
-            posterior = inference.build_posterior(tmp, sample_with="mcmc")
+            posterior = inference.build_posterior(tmp, sample_with="direct")
             if args.save:
                 save_posterior(args.save, prior, posterior, input_length=xs_xy_flat.shape[1])
-        # Evaluation
-        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior)
+        # Evaluation (basic MAF uses flattened trajectories)
+        eval_accuracy_trajectory(args.eval_n, sim_cfg, prior, posterior, flatten=True)
 
 
 if __name__ == "__main__":
