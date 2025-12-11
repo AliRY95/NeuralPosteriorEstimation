@@ -1,0 +1,2 @@
+For cases with cancer cells, we don't have any physical insights into some parameters such as Q, D, lambda.
+So, it makes more sense to use a wider prior for these values and with some help from SNPE, gradually converge to the actual values for these parameters.
