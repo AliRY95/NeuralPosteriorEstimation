@@ -70,20 +70,20 @@ def main():
 
     if args.field_type == "cancer":
         # Prior over (kappa, d_tau, target_L)
-        theta_min = torch.tensor([1.0, 0.01, 0.2])
-        theta_max = torch.tensor([8.0, 0.15, 0.8])
+        theta_min = torch.tensor([1.0, 0.1, 5])
+        theta_max = torch.tensor([4.0, 0.3, 9])
         prior = BoxUniform(theta_min, theta_max)
 
         # Generate simulations
         sim_cfg = dict(
             N_pop=1,
-            T_max=100.0,
+            T_max=300.0,
             field_type="cancer",
-            target_Q= 1000.0,
-            target_x0= 10.0,
-            target_y0= 10.0,
-            s=1.0,
-            # lambda=0.5,
+            target_Q= 0.01,
+            target_x0= 1.0,
+            target_y0= 1.0,
+            s=0.01,
+            lambda_=1.,
             theta_init=None,
             seed=seed,
         )
@@ -106,7 +106,9 @@ def main():
 
     num_simulations = args.n_sim
     thetas = prior.sample((num_simulations,))
+    print(f"Simulating {num_simulations} trajectories...")
     x = simulator_trajectory(thetas, sim_cfg=sim_cfg)
+    print("Simulations completed.")
 
     # -----------------------------
     # Architecture selection

@@ -73,8 +73,24 @@ def default_field(x: float, y: float) -> float:
 # Cancer-like Gaussian chemo-attractant field -- simplified version
 # This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
 def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, lmbda: float) -> float:
-    """chemo-attractant field with a peak."""
-    return Q / (2. * np.pi) * kv(0, np.sqrt(((x-x0)**2 + (y-y0)**2) * lmbda))
+    """
+    Chemo-attractant field with a peak at (x0, y0).
+    Uses modified Bessel function K0 which decreases with distance.
+    Lambda controls the decay rate - larger lambda means faster decay.
+    """
+    r_squared = (x - x0)**2 + (y - y0)**2
+    # Avoid singularity at target location
+    if r_squared < 1e-6:
+        return Q / (2.0 * np.pi)  # Maximum concentration at target
+    
+    r = np.sqrt(r_squared)
+    # For K0, we want argument to grow with distance for proper decay
+    # Using sqrt(lambda) * r so larger lambda → faster decay
+    arg = np.sqrt(lmbda) * r
+    
+    # K0 diverges at 0 and decays exponentially for large arguments
+    # This gives us a peak at the target and decay away from it
+    return Q / (2.0 * np.pi) * kv(0, arg)
 
 
 # Central finite-difference approximation of gradient
@@ -106,7 +122,7 @@ def simulate_codling_walk(
     - target_Q (float): chemo source strength for cancer field
     - target_x0 (float): chemo source x-coordinate for cancer field
     - target_y0 (float): chemo source y-coordinate for cancer field
-    - s (float): constant speed (distance units per time unit). Default: 1.0
+    - s (float): speed (distance units per time unit). Default: 1.0
     - lambda (float): Poisson turn rate λ (events per unit time). Default: 0.5
     - theta_init (float|None): initial heading angle in radians; if None, draws U[0, 2π). Default: None
     - seed (int|None): RNG seed for reproducible trajectory. Default: None
@@ -130,15 +146,16 @@ def simulate_codling_walk(
 
     
     if field_type == "cancer":
-        L = float(theta.get("target_L"))
+        L = 10**(-float(theta.get("target_L")))
         Q = float(config.get("target_Q"))
         x0 = float(config.get("target_x0"))
         y0 = float(config.get("target_y0"))
-        # C = lambda x, y: cancer_field(x, y, 40, 40, Q, D, L)
         C = lambda x, y: cancer_field(x, y, x0, y0, Q, L)
         assert Q > 0.0 and L > 0.0, "Cancer field parameters must be positive."
+        max_grad = Q / (np.pi ** 2) * np.sqrt(L) / (1.e-6)
     else:
         C = default_field
+        max_grad = 0.01
 
     gradC = lambda x, y, h=1e-3: central_gradient(C, x, y, h)
 
@@ -155,7 +172,17 @@ def simulate_codling_walk(
     while t < T_max:
         dt = rng.exponential(1.0 / lambda_)
 
+        # Compute gradient for chemotaxis and adaptive speed
         dCdx, dCdy = gradC(x, y)
+        grad_mag = np.sqrt(dCdx**2 + dCdy**2)
+        
+        # Adaptive speed: slower when gradient is high (near target)
+        # Speed decreases as gradient increases beyond threshold
+        if grad_mag > max_grad:
+            current_speed = 0.0
+        else:
+            current_speed = np.exp(-grad_mag / max_grad) * s
+        
         if dCdx == 0.0 and dCdy == 0.0:
             theta_pref = theta
         else:
@@ -165,8 +192,8 @@ def simulate_codling_walk(
         delta_theta = rng.vonmises(mu, kappa)
         theta += delta_theta
 
-        x_new = x + s * dt * np.cos(theta)
-        y_new = y + s * dt * np.sin(theta)
+        x_new = x + current_speed * dt * np.cos(theta)
+        y_new = y + current_speed * dt * np.sin(theta)
         segment_angles.append(np.arctan2(y_new - y, x_new - x))
         x, y = x_new, y_new
         t += dt

@@ -11,20 +11,20 @@ from simulator_trajectory import (
 def main():
     # Define parameters
     theta = {
-        "kappa": 8.,  # von Mises concentration
-        "d_tau": 0.25,  # chemo sensitivity
-        "target_L": 1.,  # chemo decay length scale 
+        "kappa": 4.,  # von Mises concentration
+        "d_tau": 0.2,  # chemo sensitivity
+        "target_L": 4,  # chemo decay length scale 
     }
 
     config = {
-        "N_pop": 16,  # number of walkers
-        "T_max": 100.0,  # total time horizon
+        "N_pop": 1,  # number of walkers
+        "T_max": 400.0,  # total time horizon
         "field_type": "cancer",  # chemo-attractant field type
-        "target_Q": 1.0,  # target strength
-        "target_x0": 10.0,  # target x-coordinate
-        "target_y0": 10.0,  # target y-coordinate
-        "lambda": 0.5,  # Poisson turn rate
-        "s": 1.0,  # speed
+        "target_Q": 0.01,  # target strength
+        "target_x0": 1.0,  # target x-coordinate
+        "target_y0": 1.0,  # target y-coordinate
+        "lambda_": 1.,  # Poisson turn rate
+        "s": .01,  # speed
         "seed": 1234,  # base seed for reproducible diversity
     }
 
