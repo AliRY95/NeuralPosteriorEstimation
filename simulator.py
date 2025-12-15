@@ -13,7 +13,11 @@ def simulator_trajectory(theta: torch.Tensor, sim_cfg: dict) -> torch.Tensor:
     
     Returns: torch.Tensor of shape (N, T, 3) with [x(t), y(t), t_norm] per theta.
     """
-    theta = theta.reshape(-1, 2)
+    field = sim_cfg.get("field_type", "linear")
+    if field == "cancer":
+        theta = theta.reshape(-1, 3)
+    else:
+        theta = theta.reshape(-1, 2)
 
     T_max = float(sim_cfg.get("T_max", 100.0))
     M = int(np.floor(T_max))
@@ -23,10 +27,19 @@ def simulator_trajectory(theta: torch.Tensor, sim_cfg: dict) -> torch.Tensor:
 
     traces = []
     step = float(sim_cfg.get("s", 1.0))
-    for params in theta:
-        kappa = float(params[0])
-        d_tau = float(params[1])
-        sim_theta = {"kappa": kappa, "d_tau": d_tau}
+    for params in theta:        
+        if field == "cancer":
+            sim_theta = {
+                "kappa": float(params[0]),
+                "d_tau": float(params[1]),
+                "target_L": float(params[2]),
+            }
+        else:
+            sim_theta = {
+                "kappa": float(params[0]),
+                "d_tau": float(params[1]),
+            }
+
         # series: angle deltas per timestep (length T)
         traj = simulate_population(sim_theta, sim_cfg)
         tr = traj[0].interpolate_to_integers(T_max)

@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 
 import numpy as np
+from scipy.special import kv
 
 Field = Callable[[float, float], float]
 Gradient = Callable[[float, float], tuple[float, float]]
@@ -61,6 +62,44 @@ def default_field(x: float, y: float) -> float:
     """Simple linear chemo-attractant field C(x, y) = 0.01 x."""
     return 0.01 * x
 
+# Cancer-like Gaussian chemo-attractant field
+# This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
+def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, lmbda: float) -> float:
+    """
+    Chemo-attractant field with a peak at (x0, y0).
+    Uses modified Bessel function K0 which decreases with distance.
+    Lambda controls the decay rate - larger lambda means faster decay.
+    """
+    r_squared = (x - x0)**2 + (y - y0)**2
+    # Avoid singularity at target location
+    if r_squared < 1e-5:
+        return Q / (2.0 * np.pi)  # Maximum concentration at target
+    
+    r = np.sqrt(r_squared)
+    # For K0, we want argument to grow with distance for proper decay
+    # Using sqrt(lambda) * r so larger lambda → faster decay
+    arg = np.sqrt(lmbda) * r
+    
+    # K0 diverges at 0 and decays exponentially for large arguments
+    # This gives us a peak at the target and decay away from it
+    return Q / (2.0 * np.pi) * kv(0, arg)
+
+
+# Cancer-like Gaussian chemo-attractant field gradient
+# This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
+def cancer_field_gradient(x: float, y: float, x0: float, y0: float, Q: float, lmbda: float) -> tuple[float, float]:
+    """
+    Gradient of chemo-attractant field with a peak at (x0, y0).
+    Uses modified Bessel function K0 which decreases with distance.
+    Lambda controls the decay rate - larger lambda means faster decay.
+    """
+    r_squared = (x - x0)**2 + (y - y0)**2
+    r = np.sqrt(r_squared)
+    arg = np.sqrt(lmbda) * r
+    grad = - Q / (2.0 * np.pi) * np.sqrt(lmbda) * kv(1, arg)
+    # Gradient components
+    return grad * (x - x0) / r, grad * (y - y0) / r
+
 
 # Central finite-difference approximation of gradient
 def central_gradient(C: Field, x: float, y: float, h: float = 1e-3) -> tuple[float, float]:
@@ -75,20 +114,24 @@ def central_gradient(C: Field, x: float, y: float, h: float = 1e-3) -> tuple[flo
 ################################################################################
 # Codling-style correlated random walk simulator
 def simulate_codling_walk(
-    theta: dict,  # {"kappa": float, "d_tau": float}
-    config: dict,  # {"s","lambda","T_max","B","seed","C","gradC","theta_init"}
+    theta: dict,
+    config: dict,
     rng: np.random.Generator | None = None,
 ) -> Trajectory:
     """
     theta keys:
     - kappa (float): concentration parameter of von Mises turn angle distribution
     - d_tau (float): chemo sensitivity parameter for biasing turn angles
+    - target_L (float): chemo decay length scale for cancer field
+
     config keys:
     - T_max (float): total simulation horizon (time units). Default: 100.0
+    - field_type (str): chemo-attractant field type. Default: linear field 0.01·x
+    - target_Q (float): chemo source strength for cancer field
+    - target_x0 (float): chemo source x-coordinate for cancer field
+    - target_y0 (float): chemo source y-coordinate for cancer field
+    - s (float): speed (distance units per time unit). Default: 1.0
     - lambda (float): Poisson turn rate λ (events per unit time). Default: 0.5
-    - s (float): constant speed (distance units per time unit). Default: 1.0
-    - C (Field|None): chemo-attractant field C(x, y). Default: linear field 0.01·x
-    - gradC (Gradient|None): gradient ∇C(x, y); if None, uses central differences. Default: None
     - theta_init (float|None): initial heading angle in radians; if None, draws U[0, 2π). Default: None
     - seed (int|None): RNG seed for reproducible trajectory. Default: None
     """
@@ -99,9 +142,8 @@ def simulate_codling_walk(
     s = float(config.get("s", 1.0))
     lambda_ = float(config.get("lambda", 0.5))
     T_max = float(config.get("T_max", 100.0))
-    C = config.get("C")
-    gradC = config.get("gradC")
-    theta_init = config.get("theta_init")
+    field_type = config.get("field_type", "linear")
+    theta_init = config.get("theta_init", None)
     # initialize local RNG (avoid global state)
     if rng is None:
         seed = config.get("seed")
@@ -110,10 +152,21 @@ def simulate_codling_walk(
         except Exception:
             rng = np.random.default_rng()
 
-    if C is None:
+    
+    if field_type == "cancer":
+        L = 10**(-float(theta.get("target_L")))
+        Q = float(config.get("target_Q"))
+        x0 = float(config.get("target_x0"))
+        y0 = float(config.get("target_y0"))
+        C = lambda x, y: cancer_field(x, y, x0, y0, Q, L)
+        assert Q > 0.0 and L > 0.0, "Cancer field parameters must be positive."
+        gradC = lambda x, y: cancer_field_gradient(x, y, x0, y0, Q, L)
+        max_grad = Q / (2.0 * np.pi) * np.sqrt(L) * kv(1, 1.e-4)
+    else:
         C = default_field
-    if gradC is None:
-        gradC = lambda x, y, h=1e-3: central_gradient(C, x, y, h)
+        gradC = lambda x, y, h=1e-5: central_gradient(C, x, y, h)
+        max_grad = 0.01
+
 
     t = 0.0
     x = 0.0
@@ -128,7 +181,28 @@ def simulate_codling_walk(
     while t < T_max:
         dt = rng.exponential(1.0 / lambda_)
 
+        # Compute gradient for chemotaxis and adaptive speed
         dCdx, dCdy = gradC(x, y)
+        # grad_mag = np.sqrt(dCdx**2 + dCdy**2)
+        
+        # # Adaptive speed: slower when gradient is high (near target)
+        # # Speed decreases as gradient increases beyond threshold
+        # if grad_mag > max_grad:
+        #     current_speed = 0.0
+        # else:
+        #     current_speed = np.exp(-grad_mag / max_grad) * s
+        
+        if field_type == "cancer":
+            grad_mag = np.sqrt(dCdx**2 + dCdy**2)
+
+            if grad_mag > max_grad:
+                current_speed = 0.0
+            else:
+                current_speed = np.exp(-grad_mag / max_grad) * s
+        else:
+            # LINEAR: restore original model
+            current_speed = s
+            
         if dCdx == 0.0 and dCdy == 0.0:
             theta_pref = theta
         else:
@@ -138,8 +212,8 @@ def simulate_codling_walk(
         delta_theta = rng.vonmises(mu, kappa)
         theta += delta_theta
 
-        x_new = x + s * dt * np.cos(theta)
-        y_new = y + s * dt * np.sin(theta)
+        x_new = x + current_speed * dt * np.cos(theta)
+        y_new = y + current_speed * dt * np.sin(theta)
         segment_angles.append(np.arctan2(y_new - y, x_new - x))
         x, y = x_new, y_new
         t += dt
@@ -158,23 +232,26 @@ def simulate_codling_walk(
 
 # Simulate a population of walkers using theta/config dictionaries.
 def simulate_population(
-    theta: dict,  # {"kappa": float, "d_tau": float}
-    config: dict,  # {"N_pop","s","lambda","T_max","B","seed", ...}
+    theta: dict,  
+    config: dict,
     rng: np.random.Generator | None = None,
 ) -> Sequence[Trajectory]:
     """
     theta keys:
     - kappa (float): concentration parameter of von Mises turn angle distribution
     - d_tau (float): chemo sensitivity parameter for biasing turn angles
+    - target_Q (float): chemo source strength for cancer field
+    - target_D (float): chemo diffusion coefficient for cancer field
+    - target_L (float): chemo decay length scale for cancer field
+
     config keys:
     - N_pop (int): number of walkers. Default: 1
     - T_max (float): total simulation horizon (time units). Default: 100.0
-    - lambda (float): Poisson turn rate λ (events per unit time). Default: 0.5
+    - field_type (str): chemo-attractant field type. Default: linear field 0.01·x
     - s (float): constant speed (distance units per time unit). Default: 1.0
-    - C (Field|None): chemo-attractant field C(x, y). Default: linear field 0.01·x
-    - gradC (Gradient|None): gradient ∇C(x, y); if None, uses central differences. Default: None
+    - lambda (float): Poisson turn rate λ (events per unit time). Default: 0.5
     - theta_init (float|None): initial heading angle in radians; if None, draws U[0, 2π). Default: None
-    - seed (int|None): RNG seed for reproducible trajectories. Default: None
+    - seed (int|None): RNG seed for reproducible trajectory. Default: None
     """
     # extract N_pop from config
     N_pop = int(config.get("N_pop", 1))
@@ -206,7 +283,7 @@ def simulate_population(
     return trajectories
 
 def population_simple_summary(
-    theta: dict,  # {"kappa", "d_tau"}
+    theta: dict,
     config: dict,
 ) -> np.ndarray:
     """
@@ -497,3 +574,132 @@ def plot_segment_angle_distributions(
             except Exception:
                 pass
         plt.close(fig)
+
+# Plot chemo-attractant field
+def plot_field(
+    field_type: str = "linear",
+    theta: dict | None = None,
+    config: dict | None = None,
+    xlim: tuple[float, float] = (-5, 5),
+    ylim: tuple[float, float] = (-5, 5),
+    resolution: int = 200,
+    out_dir: str | None = None,
+    show: bool = False,
+    fname_prefix: str = "field",
+) -> None:
+    """
+    Plot the chemo-attractant field as a 2D heatmap with contours.
+
+    Parameters:
+    - field_type: "linear" or "cancer"
+    - theta: dict with field parameters (for cancer: target_Q, target_D, target_L)
+    - xlim: x-axis range (min, max)
+    - ylim: y-axis range (min, max)
+    - resolution: number of grid points along each axis
+    - out_dir: directory to save figure; defaults to 'plot' next to this file
+    - show: whether to display the figure
+    - fname_prefix: filename prefix for saved figure
+    """
+    try:
+        from pathlib import Path
+
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    # Prepare output
+    plot_dir = Path(out_dir) if out_dir is not None else Path(__file__).parent / "plot"
+    plot_dir.mkdir(parents=True, exist_ok=True)
+
+    # Create field function
+    if field_type == "cancer":
+        if theta is None:
+            raise ValueError("theta dict required for cancer field (keys: target_Q, target_D, target_L)")
+        L = float(theta.get("target_L"))
+        Q = float(config.get("target_Q"))
+        x0 = float(config.get("target_x0"))
+        y0 = float(config.get("target_y0"))
+        C = lambda x, y: cancer_field(x, y, x0, y0, Q, L)
+        title = f"Cancer Field (Q={Q:.1f}, λ={L:.2f})"
+        fname = f"{fname_prefix}_cancer_Q{Q:.0f}_L{L:.2f}.png"
+    else:
+        C = default_field
+        title = "Linear Field (C = 0.01·x)"
+        fname = f"{fname_prefix}_linear.png"
+
+    # Create grid
+    x = np.linspace(xlim[0], xlim[1], resolution)
+    y = np.linspace(ylim[0], ylim[1], resolution)
+    X, Y = np.meshgrid(x, y)
+    Z = np.zeros_like(X)
+    gradC_func = lambda x, y: central_gradient(C, x, y)
+
+    # Evaluate field and gradient at each grid point
+    U = np.zeros_like(X)  # gradient x-component
+    V = np.zeros_like(Y)  # gradient y-component
+    for i in range(X.shape[0]):
+        for j in range(X.shape[1]):
+            Z[i, j] = C(X[i, j], Y[i, j])
+            dCdx, dCdy = gradC_func(X[i, j], Y[i, j])
+            U[i, j] = dCdx
+            V[i, j] = dCdy
+
+    # Plot field and gradient
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(16, 7))
+    
+    # --- Left panel: Field concentration ---
+    im1 = ax1.contourf(X, Y, Z, levels=50, cmap="viridis")
+    contours1 = ax1.contour(X, Y, Z, levels=10, colors="white", alpha=0.4, linewidths=0.5)
+    ax1.clabel(contours1, inline=True, fontsize=8, fmt="%.2e")
+    cbar1 = fig.colorbar(im1, ax=ax1, label="Concentration C(x, y)")
+    
+    if field_type == "cancer":
+        ax1.plot(x0, y0, "r*", markersize=15, label=f"Target ({x0}, {y0})")
+    ax1.plot(0, 0, "ko", markersize=8, label="Origin (0, 0)")
+    ax1.legend(loc="upper left")
+    ax1.set_xlabel("x")
+    ax1.set_ylabel("y")
+    ax1.set_title(f"{title} - Concentration")
+    ax1.set_aspect("equal")
+    ax1.grid(True, alpha=0.3)
+    
+    # --- Right panel: Gradient magnitude with quiver ---
+    grad_mag = np.sqrt(U**2 + V**2)
+    im2 = ax2.contourf(X, Y, grad_mag, levels=50, cmap="plasma")
+    cbar2 = fig.colorbar(im2, ax=ax2, label="Gradient Magnitude |∇C|")
+    
+    # Quiver plot (subsample for clarity)
+    skip = max(1, resolution // 20)
+    ax2.quiver(
+        X[::skip, ::skip], 
+        Y[::skip, ::skip], 
+        U[::skip, ::skip], 
+        V[::skip, ::skip],
+        color="white",
+        alpha=0.6,
+        scale_units="xy",
+        scale=None,
+        width=0.003,
+    )
+    
+    if field_type == "cancer":
+        ax2.plot(x0, y0, "r*", markersize=15, label=f"Target ({x0}, {y0})")
+    ax2.plot(0, 0, "ko", markersize=8, label="Origin (0, 0)")
+    ax2.legend(loc="upper left")
+    ax2.set_xlabel("x")
+    ax2.set_ylabel("y")
+    ax2.set_title(f"{title} - Gradient")
+    ax2.set_aspect("equal")
+    ax2.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    out_path = plot_dir / fname
+    plt.savefig(out_path, dpi=150)
+    print(f"Field plot saved to: {out_path}")
+    
+    if show:
+        try:
+            plt.show()
+        except Exception:
+            pass
+    plt.close()
