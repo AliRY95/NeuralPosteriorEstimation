@@ -13,16 +13,16 @@ def main():
     theta = {
         "kappa": 4.,  # von Mises concentration
         "d_tau": 0.2,  # chemo sensitivity
-        "target_L": 4,  # chemo decay length scale 
+        "target_L": 8,  # chemo decay length scale 
     }
 
     config = {
         "N_pop": 1,  # number of walkers
-        "T_max": 400.0,  # total time horizon
+        "T_max": 300.0,  # total time horizon
         "field_type": "cancer",  # chemo-attractant field type
-        "target_Q": 0.01,  # target strength
-        "target_x0": 1.0,  # target x-coordinate
-        "target_y0": 1.0,  # target y-coordinate
+        "target_Q": .01,  # target strength
+        "target_x0": 1.0001,  # target x-coordinate
+        "target_y0": 1.0001,  # target y-coordinate
         "lambda_": 1.,  # Poisson turn rate
         "s": .01,  # speed
         "seed": 1234,  # base seed for reproducible diversity

@@ -70,18 +70,18 @@ def main():
 
     if args.field_type == "cancer":
         # Prior over (kappa, d_tau, target_L)
-        theta_min = torch.tensor([1.0, 0.1, 5])
-        theta_max = torch.tensor([4.0, 0.3, 9])
+        theta_min = torch.tensor([1.0, 0.1, 4])
+        theta_max = torch.tensor([4.0, 0.3, 8])
         prior = BoxUniform(theta_min, theta_max)
 
         # Generate simulations
         sim_cfg = dict(
             N_pop=1,
-            T_max=300.0,
+            T_max=400.0,
             field_type="cancer",
             target_Q= 0.01,
-            target_x0= 1.0,
-            target_y0= 1.0,
+            target_x0= 1.0001,
+            target_y0= 1.0001,
             s=0.01,
             lambda_=1.,
             theta_init=None,

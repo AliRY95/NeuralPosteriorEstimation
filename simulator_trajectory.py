@@ -62,15 +62,7 @@ def default_field(x: float, y: float) -> float:
     """Simple linear chemo-attractant field C(x, y) = 0.01 x."""
     return 0.01 * x
 
-
 # Cancer-like Gaussian chemo-attractant field
-# This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
-# def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, D: float, lmbda: float) -> float:
-#     """chemo-attractant field with a peak."""
-#     return Q / (2. * np.pi * D) * kv(0, np.sqrt(((x-x0)**2 + (y-y0)**2) * lmbda / D))
-
-
-# Cancer-like Gaussian chemo-attractant field -- simplified version
 # This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
 def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, lmbda: float) -> float:
     """
@@ -80,7 +72,7 @@ def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, lmbda: floa
     """
     r_squared = (x - x0)**2 + (y - y0)**2
     # Avoid singularity at target location
-    if r_squared < 1e-6:
+    if r_squared < 1e-5:
         return Q / (2.0 * np.pi)  # Maximum concentration at target
     
     r = np.sqrt(r_squared)
@@ -91,6 +83,22 @@ def cancer_field(x: float, y: float, x0: float, y0: float, Q: float, lmbda: floa
     # K0 diverges at 0 and decays exponentially for large arguments
     # This gives us a peak at the target and decay away from it
     return Q / (2.0 * np.pi) * kv(0, arg)
+
+
+# Cancer-like Gaussian chemo-attractant field gradient
+# This is origin-centered; modify by shifting the input coordinates (x, y) to change the center.
+def cancer_field_gradient(x: float, y: float, x0: float, y0: float, Q: float, lmbda: float) -> tuple[float, float]:
+    """
+    Gradient of chemo-attractant field with a peak at (x0, y0).
+    Uses modified Bessel function K0 which decreases with distance.
+    Lambda controls the decay rate - larger lambda means faster decay.
+    """
+    r_squared = (x - x0)**2 + (y - y0)**2
+    r = np.sqrt(r_squared)
+    arg = np.sqrt(lmbda) * r
+    grad = - Q / (2.0 * np.pi) * np.sqrt(lmbda) * kv(1, arg)
+    # Gradient components
+    return grad * (x - x0) / r, grad * (y - y0) / r
 
 
 # Central finite-difference approximation of gradient
@@ -152,12 +160,13 @@ def simulate_codling_walk(
         y0 = float(config.get("target_y0"))
         C = lambda x, y: cancer_field(x, y, x0, y0, Q, L)
         assert Q > 0.0 and L > 0.0, "Cancer field parameters must be positive."
-        max_grad = Q / (np.pi ** 2) * np.sqrt(L) / (1.e-6)
+        gradC = lambda x, y: cancer_field_gradient(x, y, x0, y0, Q, L)
+        max_grad = Q / (2.0 * np.pi) * np.sqrt(L) * kv(1, 1.e-4)
     else:
         C = default_field
+        gradC = lambda x, y, h=1e-5: central_gradient(C, x, y, h)
         max_grad = 0.01
 
-    gradC = lambda x, y, h=1e-3: central_gradient(C, x, y, h)
 
     t = 0.0
     x = 0.0
@@ -560,8 +569,8 @@ def plot_field(
     field_type: str = "linear",
     theta: dict | None = None,
     config: dict | None = None,
-    xlim: tuple[float, float] = (-10, 50),
-    ylim: tuple[float, float] = (-10, 50),
+    xlim: tuple[float, float] = (-5, 5),
+    ylim: tuple[float, float] = (-5, 5),
     resolution: int = 200,
     out_dir: str | None = None,
     show: bool = False,
