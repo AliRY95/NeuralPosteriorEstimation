@@ -183,15 +183,26 @@ def simulate_codling_walk(
 
         # Compute gradient for chemotaxis and adaptive speed
         dCdx, dCdy = gradC(x, y)
-        grad_mag = np.sqrt(dCdx**2 + dCdy**2)
+        # grad_mag = np.sqrt(dCdx**2 + dCdy**2)
         
-        # Adaptive speed: slower when gradient is high (near target)
-        # Speed decreases as gradient increases beyond threshold
-        if grad_mag > max_grad:
-            current_speed = 0.0
+        # # Adaptive speed: slower when gradient is high (near target)
+        # # Speed decreases as gradient increases beyond threshold
+        # if grad_mag > max_grad:
+        #     current_speed = 0.0
+        # else:
+        #     current_speed = np.exp(-grad_mag / max_grad) * s
+        
+        if field_type == "cancer":
+            grad_mag = np.sqrt(dCdx**2 + dCdy**2)
+
+            if grad_mag > max_grad:
+                current_speed = 0.0
+            else:
+                current_speed = np.exp(-grad_mag / max_grad) * s
         else:
-            current_speed = np.exp(-grad_mag / max_grad) * s
-        
+            # LINEAR: restore original model
+            current_speed = s
+            
         if dCdx == 0.0 and dCdy == 0.0:
             theta_pref = theta
         else:
